@@ -2,18 +2,25 @@
 defmodule Aoc2022.Day17 do
 
   defmodule Stream do
-    defstruct [:enum, :curr]
+    defstruct [:enum, :length, :curr]
 
     def new(enum) do
+      enum =
+        enum
+        |> Enum.with_index()
+        |> Enum.map(fn {v, i} -> {i, v} end)
+        |> Enum.into(%{})
+
       %__MODULE__{
         enum: enum,
+        length: map_size(enum),
         curr: 0
       }
     end
 
-    def next(stream) do
-      val = Enum.at(stream.enum, stream.curr)
-      stream = %{stream | curr: rem(stream.curr + 1, length(stream.enum))}
+    def next(%__MODULE__{} = stream) do
+      val = Map.fetch!(stream.enum, stream.curr)
+      stream = %{stream | curr: rem(stream.curr + 1, stream.length)}
       {stream, val}
     end
   end
@@ -27,21 +34,50 @@ defmodule Aoc2022.Day17 do
       do: %XY{x: x1 + x2, y: y1 + y2}
   end
 
-
   defmodule Rock do
-    defstruct [:coords]
+    defstruct [:coords, :xy, :boundaries]
 
-    def new(coords) do
-      %__MODULE__{coords: coords}
+    def new(%MapSet{} = coords) do
+      boundaries =
+        coords
+        |> Enum.reduce(%{}, fn %{x: x, y: y}, b ->
+          %{
+            right: max(x, Map.get(b, :right, 0)),
+            left: min(x, Map.get(b, :left, 0)),
+            up: max(y, Map.get(b, :up, 0)),
+            down: min(y, Map.get(b, :down, 0))
+          }
+        end)
+
+      %__MODULE__{
+        coords: coords,
+        xy: XY.new(),
+        boundaries: boundaries
+      }
+
     end
 
-    def move(rock, :right), do: do_move(rock, +1)
-    def move(rock, :left), do: do_move(rock, -1)
+    @left_shift XY.new(-1, 0)
+    @right_shift XY.new(+1, 0)
+    @down_shift XY.new(0, -1)
 
-    defp do_move(rock, inc) do
+    def shift(rock, :down), do: shift(rock, @down_shift)
+
+    def shift(rock, :left), do: shift(rock, @left_shift)
+
+    def shift(rock, :right), do: shift(rock, @right_shift)
+
+    def shift(rock, %XY{x: x, y: y} = xy) do
       %{
         rock |
-        coords: Enum.map(rock.coords, & XY.add(&1, inc))
+        xy: XY.add(rock.xy, xy),
+        coords: Enum.map(rock.coords, &XY.add(&1, xy)) |> MapSet.new(),
+        boundaries: %{
+          up: rock.boundaries.up + y,
+          down: rock.boundaries.down + y,
+          right: rock.boundaries.right + x,
+          left: rock.boundaries.left + x,
+        }
       }
     end
 
@@ -50,41 +86,34 @@ defmodule Aoc2022.Day17 do
   defmodule Chamber do
     defstruct [
       :coords,
+      :remaining_rocks,
       :highest_rock_y
     ]
 
-    def new do
+    def new(remaining_rocks) do
       %__MODULE__{
-        coords: %{},
+        coords: MapSet.new(),
+        remaining_rocks: remaining_rocks,
         highest_rock_y: 0
       }
     end
 
-    def put(chamber, rock, %XY{} = xy) do
-      rock.coords
-      |> Enum.reduce(chamber, fn rock_xy, chamber ->
-        xy = XY.add(xy, rock_xy)
-        %{
-          chamber |
-          highest_rock_y: max(chamber.highest_rock_y, xy.y + 1),
-          coords: Map.put(chamber.coords, xy, :rock)
-        }
-      end)
-
+    def put(chamber, rock) do
+      %{
+        chamber |
+        remaining_rocks: chamber.remaining_rocks - 1,
+        highest_rock_y: max(chamber.highest_rock_y, rock.boundaries.up + 1),
+        coords: MapSet.union(chamber.coords, rock.coords),
+      }
     end
 
-    def fits?(chamber, rock, xy) do
-      rock.coords
-      |> Enum.all?(fn rock_xy ->
-        %{x: x, y: y} = rock_xy = XY.add(xy, rock_xy)
-        cond do
-          Map.has_key?(chamber.coords, rock_xy) -> false
-          x < 0 -> false
-          x > 6 -> false
-          y < 0 -> false
-          true -> true
-        end
-      end)
+    def can_be_placed?(chamber, rock) do
+      cond do
+        rock.boundaries.left < 0 -> false
+        rock.boundaries.right > 6 -> false
+        rock.boundaries.down < 0 -> false
+        true -> MapSet.disjoint?(chamber.coords, rock.coords)
+      end
     end
 
     def show(chamber) do
@@ -92,27 +121,26 @@ defmodule Aoc2022.Day17 do
         IO.write("|")
         for x <- 0..6 do
           xy = XY.new(x, y)
-          (if Map.has_key?(chamber.coords, xy), do: "#", else: ".")
+          (if MapSet.member?(chamber.coords, xy), do: "#", else: ".")
           |> IO.write()
         end
         IO.write("|")
         IO.puts("")
       end
       IO.puts("---------")
+      IO.puts("")
 
       chamber
     end
 
-    def show(chamber, rock, rock_xy) do
-      falling_rock = %{rock | coords: Enum.map(rock.coords, &XY.add(&1, rock_xy))}
-      max_falling_rock_y = Enum.map(falling_rock.coords, & &1.y) |> Enum.max()
-      for y <- max(chamber.highest_rock_y, max_falling_rock_y)..0 do
+    def show(chamber, rock) do
+      for y <- max(chamber.highest_rock_y, rock.boundaries.up)..0 do
         IO.write("|")
         for x <- 0..6 do
           xy = XY.new(x, y)
           cond do
-            xy in falling_rock.coords -> "@"
-            Map.has_key?(chamber.coords, xy) -> "#"
+            xy in rock.coords -> "@"
+            xy in chamber.coords -> "#"
             true -> "."
           end
           |> IO.write()
@@ -121,6 +149,7 @@ defmodule Aoc2022.Day17 do
         IO.puts("")
       end
       IO.puts("---------")
+      IO.puts("")
 
       chamber
     end
@@ -130,49 +159,48 @@ defmodule Aoc2022.Day17 do
   def part1 do
     jet_pattern = load()
     rock_stream = build_rock_stream()
-    chamber = Chamber.new()
+    chamber = Chamber.new(2022)
 
-    next_rock_phase(chamber, rock_stream, jet_pattern, 0)
+    phase(:next_rock, chamber, rock_stream, nil, jet_pattern)
     |> case do chamber -> chamber.highest_rock_y end
-
   end
 
-  defp next_rock_phase(chamber, _, _, 1_000_000_000_000) do
-    chamber
+  def part2 do
+    jet_pattern = load()
+    rock_stream = build_rock_stream()
+    chamber = Chamber.new(1_000_000_000_000)
+
+    phase(:next_rock, chamber, rock_stream, nil, jet_pattern)
+    |> case do chamber -> chamber.highest_rock_y end
   end
 
-  defp next_rock_phase(chamber, rock_stream, jet_pattern, rock_count) do
-    if rem(rock_count, 1_000) == 0 do
-      IO.inspect(rock_count)
-    end
+  defp phase(:next_rock, chamber, _rock_stream, _rock, _jet_pattern)
+    when chamber.remaining_rocks == 0, do: chamber
 
+  defp phase(:next_rock, chamber, rock_stream, _rock, jet_pattern) do
     {rock_stream, rock} = Stream.next(rock_stream)
-    rock_xy = XY.new(2, chamber.highest_rock_y + 3)
-    jet_pattern_phase(chamber, rock_stream, rock, rock_xy, jet_pattern, rock_count)
+    xy = XY.new(2, chamber.highest_rock_y + 3)
+    rock = Rock.shift(rock, xy)
+    phase(:jet, chamber, rock_stream, rock, jet_pattern)
   end
 
-  defp jet_pattern_phase(chamber, rock_stream, rock, rock_xy, jet_pattern, rock_count) do
+  defp phase(:jet, chamber, rock_stream, rock, jet_pattern) do
     {jet_pattern, jet_direction} = Stream.next(jet_pattern)
-    attempt_rock_xy =
-      case jet_direction do
-        :left -> XY.add(rock_xy, XY.new(-1, 0))
-        :right -> XY.add(rock_xy, XY.new(+1, 0))
-      end
-
-    rock_xy = if Chamber.fits?(chamber, rock, attempt_rock_xy), do: attempt_rock_xy, else: rock_xy
-    #Chamber.show(chamber, rock, rock_xy)
-    fall_phase(chamber, rock_stream, rock, rock_xy, jet_pattern, rock_count)
+    rock_test = Rock.shift(rock, jet_direction)
+    rock = if Chamber.can_be_placed?(chamber, rock_test), do: rock_test, else: rock
+    phase(:rock_fall, chamber, rock_stream, rock, jet_pattern)
   end
 
-  def fall_phase(chamber, rock_stream, rock, rock_xy, jet_pattern, rock_count) do
-    attempt_rock_xy = XY.add(rock_xy, XY.new(0, -1))
-    if Chamber.fits?(chamber, rock, attempt_rock_xy) do
-      jet_pattern_phase(chamber, rock_stream, rock, attempt_rock_xy, jet_pattern, rock_count)
-    else
-      chamber = Chamber.put(chamber, rock, rock_xy)
-      #Chamber.show(chamber)
-      next_rock_phase(chamber, rock_stream, jet_pattern, rock_count + 1)
-    end
+  defp phase(:rock_fall, chamber, rock_stream, rock, jet_pattern) do
+    rock_test = Rock.shift(rock, :down)
+    {next_phase, chamber, rock} =
+      if Chamber.can_be_placed?(chamber, rock_test) do
+        {:jet, chamber, rock_test}
+      else
+        chamber = Chamber.put(chamber, rock)
+        {:next_rock, chamber, rock}
+      end
+    phase(next_phase, chamber, rock_stream, rock, jet_pattern)
   end
 
   defp load do
@@ -193,7 +221,7 @@ defmodule Aoc2022.Day17 do
   end
 
   defp build_rocks do
-    rock = """
+    """
 ####
 
 .#.
@@ -228,16 +256,12 @@ defmodule Aoc2022.Day17 do
       |> Enum.filter(fn {t, _} -> t == "#" end)
       |> Enum.map(fn {_, x} -> XY.new(x, y) end)
     end)
+    |> MapSet.new()
     |> Rock.new()
   end
 
-
-
-
-
-
 end
 
-IO.puts("# positions cannot contain a beacon (part 1): #{Aoc2022.Day17.part1()}")
-#IO.puts("missing beacon's tunning frequency (part 2): #{Aoc2022.Day17.part2()}")
+IO.puts("rock height after 2.022 rocks (part 1): #{Aoc2022.Day17.part1()}")
+IO.puts("rock height after 1.000.000.000.000 rocks (part 1): #{Aoc2022.Day17.part2()}")
 
