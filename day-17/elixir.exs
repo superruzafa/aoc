@@ -86,23 +86,40 @@ defmodule Aoc2022.Day17 do
   defmodule Chamber do
     defstruct [
       :coords,
-      :remaining_rocks,
-      :highest_rock_y
+      :highest_y,
+      :rocks,
+      :milestone_rocks,
+      :milestone_y
     ]
 
-    def new(remaining_rocks) do
+    def new(opts \\ []) do
+      milestone_rocks = Keyword.get(opts, :milestone_rocks)
+      milestone_y = Keyword.get(opts, :milestone_y)
+
       %__MODULE__{
         coords: MapSet.new(),
-        remaining_rocks: remaining_rocks,
-        highest_rock_y: 0
+        highest_y: 0,
+        rocks: 0,
+        milestone_rocks: milestone_rocks,
+        milestone_y: milestone_y
+      }
+    end
+
+    def reset_opt(chamber, opts \\ []) do
+      milestone_rocks = Keyword.get(opts, :milestone_rocks)
+      milestone_y = Keyword.get(opts, :milestone_y)
+      %{
+        chamber |
+        milestone_rocks: milestone_rocks,
+        milestone_y: milestone_y
       }
     end
 
     def put(chamber, rock) do
       %{
         chamber |
-        remaining_rocks: chamber.remaining_rocks - 1,
-        highest_rock_y: max(chamber.highest_rock_y, rock.boundaries.up + 1),
+        rocks: chamber.rocks + 1,
+        highest_y: max(chamber.highest_y, rock.boundaries.up + 1),
         coords: MapSet.union(chamber.coords, rock.coords),
       }
     end
@@ -117,8 +134,8 @@ defmodule Aoc2022.Day17 do
     end
 
     def show(chamber) do
-      for y <- chamber.highest_rock_y..0 do
-        IO.write("|")
+      for y <- chamber.highest_y..0 do
+        IO.write("#{y |> Integer.to_string() |> String.pad_leading(6, "0")} |")
         for x <- 0..6 do
           xy = XY.new(x, y)
           (if MapSet.member?(chamber.coords, xy), do: "#", else: ".")
@@ -127,15 +144,15 @@ defmodule Aoc2022.Day17 do
         IO.write("|")
         IO.puts("")
       end
-      IO.puts("---------")
+      IO.puts("       ---------")
       IO.puts("")
 
       chamber
     end
 
     def show(chamber, rock) do
-      for y <- max(chamber.highest_rock_y, rock.boundaries.up)..0 do
-        IO.write("|")
+      for y <- max(chamber.highest_y, rock.boundaries.up)..0 do
+        IO.write("#{y |> Integer.to_string() |> String.pad_leading(6, "0")} |")
         for x <- 0..6 do
           xy = XY.new(x, y)
           cond do
@@ -148,10 +165,24 @@ defmodule Aoc2022.Day17 do
         IO.write("|")
         IO.puts("")
       end
-      IO.puts("---------")
+      IO.puts("       ---------")
       IO.puts("")
 
       chamber
+    end
+
+    def row(chamber, y) do
+      for x <- 0..6 do
+        if MapSet.member?(chamber.coords, XY.new(x, y)), do: "#", else: "."
+      end
+      |> Enum.join()
+    end
+
+    def encode(chamber, y) do
+      for x <- 0..6 do
+        if MapSet.member?(chamber.coords, XY.new(x, y)), do: trunc(Float.pow(2.0, 6 - x)), else: 0
+      end
+      |> Enum.sum()
     end
 
   end
@@ -159,27 +190,141 @@ defmodule Aoc2022.Day17 do
   def part1 do
     jet_pattern = load()
     rock_stream = build_rock_stream()
-    chamber = Chamber.new(2022)
+    chamber = Chamber.new(milestone_rocks: 2022)
 
     phase(:next_rock, chamber, rock_stream, nil, jet_pattern)
-    |> case do chamber -> chamber.highest_rock_y end
+    |> case do {chamber, _, _} -> chamber.highest_y end
   end
 
   def part2 do
     jet_pattern = load()
     rock_stream = build_rock_stream()
-    chamber = Chamber.new(1_000_000_000_000)
-
-    phase(:next_rock, chamber, rock_stream, nil, jet_pattern)
-    |> case do chamber -> chamber.highest_rock_y end
+    chamber = Chamber.new(milestone_rocks: 500_000)
+    part2_pattern(chamber, rock_stream, jet_pattern)
   end
 
-  defp phase(:next_rock, chamber, _rock_stream, _rock, _jet_pattern)
-    when chamber.remaining_rocks == 0, do: chamber
+  defp part2_pattern(chamber, rock_stream, jet_pattern) do
+    {chamber, rock_stream, jet_pattern} = phase(:next_rock, chamber, rock_stream, nil, jet_pattern)
+    IO.puts("simulation ended, trying to find pattern...")
+
+    chamber
+    |> find_pattern()
+    |> case do
+      nil ->
+        IO.puts("cannot find pattern with rock milestone = #{chamber.milestone_rocks}, increasing...")
+        chamber
+        |> Chamber.reset_opt(milestone_rocks: chamber.milestone_rocks + 1_000_000)
+        |> part2_pattern(rock_stream, jet_pattern)
+
+      {start, length} -> 
+        IO.puts("pattern found! start: #{start} length: #{length}")
+        #demonstrate(chamber, start, length)
+        extrapolate_simulation(start, length, 1_000_000_000_000)
+    end
+  end
+
+  defp demonstrate(chamber, start, length) do
+    sequence =
+      for y <- 0..chamber.highest_y do
+        {y, Chamber.row(chamber, y)}
+      end
+      |> Enum.into(%{})
+
+    for i <- 0..length - 1 do
+      for o <- 0..2 do
+        pos = start + length * o + i
+        IO.write("#{pos |> Integer.to_string() |> String.pad_leading(3, "0")} :")
+        a = Map.get(sequence, pos)
+        IO.write(a)
+        IO.write(" ")
+      end
+      IO.puts("")
+    end
+  end
+
+  defp extrapolate_simulation(start, length, target_rocks) do
+    jet_pattern = load()
+    rock_stream = build_rock_stream()
+
+    chamber = Chamber.new(milestone_y: start)
+    {chamber, rock_stream, jet_pattern} = phase(:next_rock, chamber, rock_stream, nil, jet_pattern)
+    rocks_at_pattern_start = chamber.rocks
+    height_at_pattern_start = chamber.highest_y
+
+    chamber = Chamber.reset_opt(chamber, milestone_y: start + length)
+    {chamber, rock_stream, jet_pattern} = phase(:next_rock, chamber, rock_stream, nil, jet_pattern)
+    rocks_per_pattern = (chamber.rocks - rocks_at_pattern_start)
+    height_per_pattern = (chamber.highest_y - height_at_pattern_start)
+
+    remaining_rocks = target_rocks - rocks_at_pattern_start
+    full_patterns_needed = remaining_rocks / rocks_per_pattern |> floor() |> trunc()
+    rocks_last_pattern = rem(remaining_rocks, rocks_per_pattern)
+
+    chamber = Chamber.reset_opt(chamber, milestone_rocks: chamber.rocks + rocks_last_pattern)
+    {chamber, _rock_stream, _jet_pattern} = phase(:next_rock, chamber, rock_stream, nil, jet_pattern)
+    height_added_in_last_pattern = (chamber.highest_y - height_per_pattern - height_at_pattern_start)
+
+    IO.puts("""
+# rocks when pattern starts: #{rocks_at_pattern_start}
+# height when pattern starts: #{height_at_pattern_start}
+# rocks per pattern: #{rocks_per_pattern}
+# height added per pattern: #{height_per_pattern}
+# rocks last pattern = #{rocks_last_pattern}
+# full patterns needed: #{full_patterns_needed}
+# height added in last partial pattern: #{height_added_in_last_pattern}
+""")
+
+    height_at_pattern_start + (full_patterns_needed * height_per_pattern) + height_added_in_last_pattern
+  end
+
+  defp find_pattern(chamber) do
+    sequence =
+      for y <- 0..chamber.highest_y do
+        {y, Chamber.encode(chamber, y)}
+      end
+      |> Enum.into(%{})
+
+    0..chamber.highest_y
+    |> Enum.find_value(fn i -> do_find_pattern(sequence, i) end)
+  end
+
+  defp do_find_pattern(sequence, start) do
+    x = Map.fetch!(sequence, start)
+    repetitions = Map.filter(sequence, fn {k, v} -> k > start and v == x end)
+    Enum.find_value(repetitions, fn {i, _} -> pattern?(sequence, start, i) end)
+  end
+
+  defp pattern?(sequence, start, length) do
+    x = Map.fetch!(sequence, start)
+    positions = 1..3 |> Enum.map(& (start + length * &1))
+    if Enum.all?(positions, &Map.get(sequence, &1) == x) and verify_pattern(sequence, start, length, length) do
+      {start, length}
+    else
+      false
+    end
+  end
+
+  defp verify_pattern(_sequence, _start, _length, 0), do: true
+
+  defp verify_pattern(sequence, start, length, remaining) do
+    if Map.get(sequence, start) == Map.get(sequence, start + length) do
+      verify_pattern(sequence, start + 1, length, remaining - 1)
+    else
+      false
+    end
+  end
+
+  defp phase(:next_rock, chamber, rock_stream, _rock, jet_pattern)
+    when not is_nil(chamber.milestone_rocks) and chamber.rocks == chamber.milestone_rocks,
+    do: {chamber, rock_stream, jet_pattern}
+
+  defp phase(:next_rock, chamber, rock_stream, _rock, jet_pattern)
+    when not is_nil(chamber.milestone_y) and chamber.highest_y >= chamber.milestone_y,
+    do: {chamber, rock_stream, jet_pattern}
 
   defp phase(:next_rock, chamber, rock_stream, _rock, jet_pattern) do
     {rock_stream, rock} = Stream.next(rock_stream)
-    xy = XY.new(2, chamber.highest_rock_y + 3)
+    xy = XY.new(2, chamber.highest_y + 3)
     rock = Rock.shift(rock, xy)
     phase(:jet, chamber, rock_stream, rock, jet_pattern)
   end
@@ -263,5 +408,5 @@ defmodule Aoc2022.Day17 do
 end
 
 IO.puts("rock height after 2.022 rocks (part 1): #{Aoc2022.Day17.part1()}")
-IO.puts("rock height after 1.000.000.000.000 rocks (part 1): #{Aoc2022.Day17.part2()}")
+IO.puts("rock height after 1.000.000.000.000 rocks (part 2): #{Aoc2022.Day17.part2()}")
 
