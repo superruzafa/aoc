@@ -1,6 +1,6 @@
-# Advent of code 2022
+# Advent of Code
 
-My solutions to the advent of code 2022 edition.
+My solutions to the Advent of Code puzzles.
 
-https://adventofcode.com/2022
+https://adventofcode.com
 
